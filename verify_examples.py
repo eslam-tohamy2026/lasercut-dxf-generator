@@ -21,7 +21,21 @@ def _verts(entity):
     return [(float(v[0]), float(v[1])) for v in entity.vertices()]
 
 
+def _check_units(path: str) -> None:
+    """The header must declare millimetres ($INSUNITS = 4)."""
+    with open(path, encoding="ascii") as fh:
+        text = fh.read()
+    lines = text.splitlines()
+    pairs = list(zip(lines[::2], lines[1::2]))
+    units = None
+    for i, (code, value) in enumerate(pairs):
+        if value == "$INSUNITS":
+            units = pairs[i + 1][1]
+    assert units == "4", f"{path}: $INSUNITS is {units!r}, expected '4'"
+
+
 def check_box(path: str) -> list[str]:
+    _check_units(path)
     doc = ezdxf.readfile(path)
     msp = doc.modelspace()
     polys = [e for e in msp if e.dxftype() == "LWPOLYLINE"]
@@ -33,17 +47,19 @@ def check_box(path: str) -> list[str]:
         for x, y in _verts(p):
             xs.append(x)
             ys.append(y)
-    assert abs((max(xs) - min(xs)) - 610.0) < 0.01, (min(xs), max(xs))
+    assert abs((max(xs) - min(xs)) - 685.0) < 0.01, (min(xs), max(xs))
     assert abs((max(ys) - min(ys)) - 80.0) < 0.01, (min(ys), max(ys))
-    # panel widths in layout order: 100, 100, 100, 80, 80, 100 + 10 gaps
+    # panel widths in layout order: 100, 100, 100, 80, 80, 100 + 25 gaps
     widths = sorted(max(x for x, _ in _verts(p)) - min(x for x, _ in _verts(p))
                     for p in polys)
     assert widths == [80.0, 80.0, 100.0, 100.0, 100.0, 100.0], widths
-    return ["6 closed panels", "layout 610 x 80 mm",
-            "panel widths 100/100/100/80/80/100 mm"]
+    return ["6 closed panels", "layout 685 x 80 mm (25 mm gaps)",
+            "panel widths 100/100/100/80/80/100 mm",
+            "header declares millimetres ($INSUNITS = 4)"]
 
 
 def check_gear(path: str) -> list[str]:
+    _check_units(path)
     doc = ezdxf.readfile(path)
     msp = doc.modelspace()
     polys = [e for e in msp if e.dxftype() == "LWPOLYLINE"]
@@ -61,6 +77,7 @@ def check_gear(path: str) -> list[str]:
 
 
 def check_bracket(path: str) -> list[str]:
+    _check_units(path)
     doc = ezdxf.readfile(path)
     msp = doc.modelspace()
     polys = [e for e in msp if e.dxftype() == "LWPOLYLINE"]

@@ -38,12 +38,26 @@ def _arc(cx: float, cy: float, r: float, a0: float, a1: float,
 # finger-joint box
 # ---------------------------------------------------------------------------
 
-def finger_count(edge_length: float, thickness: float) -> int:
+def finger_count(edge_length: float, thickness: float,
+                 fingers: int | None = None) -> int:
     """Number of segments (odd, >= 3) for one finger-jointed edge.
 
-    Target finger width is max(3 * thickness, 10 mm); the count is
-    forced odd so a tab-side edge starts and ends with a tab.
+    By default the count is picked automatically: target finger width
+    is max(3 * thickness, 10 mm), forced odd so a tab-side edge starts
+    and ends with a tab. Pass ``fingers`` to choose the count yourself
+    (it must be odd and >= 3, and every finger must stay at least 2x
+    the thickness wide, or the joint would be too fragile to cut).
     """
+    if fingers is not None:
+        if fingers < 3 or fingers % 2 == 0:
+            raise ValueError(
+                f"fingers must be an odd number >= 3, got {fingers}")
+        if edge_length / fingers < 2.0 * thickness:
+            raise ValueError(
+                f"{fingers} fingers on a {edge_length:g} mm edge would "
+                f"make fingers {edge_length / fingers:.2f} mm wide, "
+                f"narrower than 2x the {thickness:g} mm thickness")
+        return fingers
     target = max(3.0 * thickness, 10.0)
     n = int(edge_length // target)
     if n < 3:
@@ -57,7 +71,8 @@ def finger_count(edge_length: float, thickness: float) -> int:
 
 
 def _edge_segments(edge_length: float, thickness: float,
-                   kerf: float) -> tuple[list[bool], list[float]]:
+                   kerf: float, fingers: int | None = None
+                   ) -> tuple[list[bool], list[float]]:
     """Finger pattern for one edge.
 
     Returns (is_tab_per_segment, boundary_positions). Segment i spans
@@ -65,7 +80,7 @@ def _edge_segments(edge_length: float, thickness: float,
     slots narrowed by it, so the finished joint fits exactly; the two
     end boundaries stay fixed so the edge length is preserved.
     """
-    n = finger_count(edge_length, thickness)
+    n = finger_count(edge_length, thickness, fingers)
     w = edge_length / n
     if kerf < 0:
         raise ValueError("kerf must be >= 0")
@@ -87,70 +102,93 @@ def _edge_segments(edge_length: float, thickness: float,
 
 
 def _panel_outline(width: float, height: float, thickness: float,
-                   kerf: float, tab_edges: set[str]) -> list[tuple[float, float]]:
+                   kerf: float, tab_edges: set[str],
+                   flat_edges: frozenset[str] = frozenset(),
+                   fingers: int | None = None
+                   ) -> list[tuple[float, float]]:
     """Closed outline of one rectangular panel with finger joints.
 
     tab_edges names the edges whose even segments are tabs
     ("bottom", "right", "top", "left"); the other edges are the
     complementary slot side. Tabs sit flush on the nominal rectangle;
-    slots recede inward by the material thickness.
+    slots recede inward by the material thickness. Edges named in
+    flat_edges are drawn straight, with no fingers at all (used for
+    the open top edge of an open box). ``fingers`` fixes the finger
+    count on every jointed edge; by default it is chosen
+    automatically from the edge length and thickness.
     """
     pts: list[tuple[float, float]] = []
 
     def edge(length: float, name: str):
-        is_tab, bounds = _edge_segments(length, thickness, kerf)
+        is_tab, bounds = _edge_segments(length, thickness, kerf, fingers)
         if name not in tab_edges:
             is_tab = [not t for t in is_tab]
         return is_tab, bounds
 
     # bottom edge: (0,0) -> (width,0), inward is +y
-    is_tab, b = edge(width, "bottom")
-    for i, tab in enumerate(is_tab):
-        x0, x1 = b[i], b[i + 1]
-        if tab:
-            pts.append((x0, 0.0))
-            pts.append((x1, 0.0))
-        else:
-            pts.append((x0, 0.0))
-            pts.append((x0, thickness))
-            pts.append((x1, thickness))
-            pts.append((x1, 0.0))
+    if "bottom" in flat_edges:
+        pts.append((0.0, 0.0))
+        pts.append((width, 0.0))
+    else:
+        is_tab, b = edge(width, "bottom")
+        for i, tab in enumerate(is_tab):
+            x0, x1 = b[i], b[i + 1]
+            if tab:
+                pts.append((x0, 0.0))
+                pts.append((x1, 0.0))
+            else:
+                pts.append((x0, 0.0))
+                pts.append((x0, thickness))
+                pts.append((x1, thickness))
+                pts.append((x1, 0.0))
     # right edge: (width,0) -> (width,height), inward is -x
-    is_tab, b = edge(height, "right")
-    for i, tab in enumerate(is_tab):
-        y0, y1 = b[i], b[i + 1]
-        if tab:
-            pts.append((width, y0))
-            pts.append((width, y1))
-        else:
-            pts.append((width, y0))
-            pts.append((width - thickness, y0))
-            pts.append((width - thickness, y1))
-            pts.append((width, y1))
+    if "right" in flat_edges:
+        pts.append((width, 0.0))
+        pts.append((width, height))
+    else:
+        is_tab, b = edge(height, "right")
+        for i, tab in enumerate(is_tab):
+            y0, y1 = b[i], b[i + 1]
+            if tab:
+                pts.append((width, y0))
+                pts.append((width, y1))
+            else:
+                pts.append((width, y0))
+                pts.append((width - thickness, y0))
+                pts.append((width - thickness, y1))
+                pts.append((width, y1))
     # top edge: (width,height) -> (0,height), inward is -y
-    is_tab, b = edge(width, "top")
-    for i, tab in enumerate(is_tab):
-        x0, x1 = b[i], b[i + 1]
-        if tab:
-            pts.append((width - x0, height))
-            pts.append((width - x1, height))
-        else:
-            pts.append((width - x0, height))
-            pts.append((width - x0, height - thickness))
-            pts.append((width - x1, height - thickness))
-            pts.append((width - x1, height))
+    if "top" in flat_edges:
+        pts.append((width, height))
+        pts.append((0.0, height))
+    else:
+        is_tab, b = edge(width, "top")
+        for i, tab in enumerate(is_tab):
+            x0, x1 = b[i], b[i + 1]
+            if tab:
+                pts.append((width - x0, height))
+                pts.append((width - x1, height))
+            else:
+                pts.append((width - x0, height))
+                pts.append((width - x0, height - thickness))
+                pts.append((width - x1, height - thickness))
+                pts.append((width - x1, height))
     # left edge: (0,height) -> (0,0), inward is +x
-    is_tab, b = edge(height, "left")
-    for i, tab in enumerate(is_tab):
-        y0, y1 = b[i], b[i + 1]
-        if tab:
-            pts.append((0.0, height - y0))
-            pts.append((0.0, height - y1))
-        else:
-            pts.append((0.0, height - y0))
-            pts.append((thickness, height - y0))
-            pts.append((thickness, height - y1))
-            pts.append((0.0, height - y1))
+    if "left" in flat_edges:
+        pts.append((0.0, height))
+        pts.append((0.0, 0.0))
+    else:
+        is_tab, b = edge(height, "left")
+        for i, tab in enumerate(is_tab):
+            y0, y1 = b[i], b[i + 1]
+            if tab:
+                pts.append((0.0, height - y0))
+                pts.append((0.0, height - y1))
+            else:
+                pts.append((0.0, height - y0))
+                pts.append((thickness, height - y0))
+                pts.append((thickness, height - y1))
+                pts.append((0.0, height - y1))
     return _dedup(pts)
 
 
@@ -168,13 +206,22 @@ _PANEL_TABS: dict[str, set[str]] = {
 
 def box_panels(length: float, width: float, height: float,
                thickness: float, kerf: float = 0.0,
-               gap: float = 10.0) -> dict[str, list[tuple[float, float]]]:
+               gap: float = 25.0, fingers: int | None = None,
+               open_top: bool = False
+               ) -> dict[str, list[tuple[float, float]]]:
     """Six finger-jointed panels of a closed box, laid out flat.
 
     Outer box size is exactly length x width x height. Panels are
     returned in panel-local coordinates translated into one row with
-    ``gap`` mm between panels. Keys: bottom, front, back, left, right,
-    top.
+    ``gap`` mm between panels, so each panel is a clearly separate
+    closed outline in the file — nothing is joined or touching.
+    Keys: bottom, front, back, left, right, top.
+
+    With ``open_top`` the box has no lid: five panels are returned
+    (no "top" key) and the top edge of each side panel is straight
+    instead of finger-jointed. ``fingers`` fixes the finger count on
+    every jointed edge (odd, >= 3); by default it is chosen
+    automatically from the edge length and thickness.
     """
     for name, value in (("length", length), ("width", width),
                         ("height", height), ("thickness", thickness)):
@@ -184,6 +231,8 @@ def box_panels(length: float, width: float, height: float,
         raise ValueError("thickness is too large for the box size")
     if kerf < 0:
         raise ValueError("kerf must be >= 0")
+    if gap < 0:
+        raise ValueError("gap must be >= 0")
 
     sizes: dict[str, tuple[float, float]] = {
         "bottom": (length, width),
@@ -193,18 +242,31 @@ def box_panels(length: float, width: float, height: float,
         "right": (width, height),
         "top": (length, width),
     }
+    # Edges drawn straight instead of finger-jointed. Only the open
+    # top edges of the side panels; every other edge keeps its joint.
+    flat: dict[str, frozenset[str]] = {
+        name: frozenset({"top"}) if open_top else frozenset()
+        for name in ("front", "back", "left", "right")
+    }
+    names = ("bottom", "front", "back", "left", "right", "top")
+    if open_top:
+        names = ("bottom", "front", "back", "left", "right")
     panels: dict[str, list[tuple[float, float]]] = {}
     x = 0.0
-    for name in ("bottom", "front", "back", "left", "right", "top"):
+    for name in names:
         w, h = sizes[name]
-        outline = _panel_outline(w, h, thickness, kerf, _PANEL_TABS[name])
+        outline = _panel_outline(w, h, thickness, kerf, _PANEL_TABS[name],
+                                 flat_edges=flat.get(name, frozenset()),
+                                 fingers=fingers)
         panels[name] = [(px + x, py) for px, py in outline]
         x += w + gap
     return panels
 
 
 def box_mating_check(length: float, width: float, height: float,
-                     thickness: float, kerf: float = 0.0) -> bool:
+                     thickness: float, kerf: float = 0.0,
+                     fingers: int | None = None,
+                     open_top: bool = False) -> bool:
     """Verify every shared box edge is complementary.
 
     For each pair of mating edges the segment widths must match and the
@@ -231,8 +293,10 @@ def box_mating_check(length: float, width: float, height: float,
         ("back", "right", "right", "back", height),
     ]
     for pa, ea, pb, eb, edge_len in pairs:
-        ta, ba = _edge_segments(edge_len, thickness, kerf)
-        tb, bb = _edge_segments(edge_len, thickness, kerf)
+        if open_top and ("top" in (pa, pb)):
+            continue  # no lid: nothing mates with a top panel
+        ta, ba = _edge_segments(edge_len, thickness, kerf, fingers)
+        tb, bb = _edge_segments(edge_len, thickness, kerf, fingers)
         if ea not in _PANEL_TABS[pa]:
             ta = [not t for t in ta]
         if eb not in _PANEL_TABS[pb]:
@@ -273,6 +337,10 @@ def gear_outline(module: float, teeth: int, bore: float,
         raise ValueError("teeth must be at least 6")
     if bore < 0:
         raise ValueError("bore must be >= 0")
+    if not 10.0 <= pressure_angle_deg <= 30.0:
+        raise ValueError(
+            "pressure angle must be between 10 and 30 degrees "
+            "(standard values are 14.5, 20 and 25)")
     alpha = math.radians(pressure_angle_deg)
     r_pitch = module * teeth / 2.0
     r_base = r_pitch * math.cos(alpha)

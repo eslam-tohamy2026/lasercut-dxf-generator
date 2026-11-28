@@ -21,7 +21,12 @@ def _pair(code: int, value: str) -> list[str]:
 
 
 class DxfDocument:
-    """A tiny DXF R12 document: polylines + circles only."""
+    """A tiny DXF R2000 document: polylines + circles only.
+
+    The header declares millimetres ($INSUNITS = 4) so CAD and laser
+    software open the file at the right scale instead of guessing
+    (some programs default to inches without it).
+    """
 
     def __init__(self) -> None:
         self._polylines: list[list[tuple[float, float]]] = []
@@ -59,11 +64,24 @@ class DxfDocument:
         return (min(xs), min(ys), max(xs), max(ys))
 
     def to_string(self) -> str:
+        min_x, min_y, max_x, max_y = self.bounds()
         out: list[str] = []
         out += _pair(0, "SECTION")
         out += _pair(2, "HEADER")
         out += _pair(9, "$ACADVER")
         out += _pair(1, "AC1015")
+        out += _pair(9, "$INSUNITS")
+        out += _pair(70, "4")  # millimetres
+        out += _pair(9, "$MEASUREMENT")
+        out += _pair(70, "1")  # metric
+        out += _pair(9, "$EXTMIN")
+        out += _pair(10, _fmt(min_x))
+        out += _pair(20, _fmt(min_y))
+        out += _pair(30, "0.0")
+        out += _pair(9, "$EXTMAX")
+        out += _pair(10, _fmt(max_x))
+        out += _pair(20, _fmt(max_y))
+        out += _pair(30, "0.0")
         out += _pair(0, "ENDSEC")
 
         # --- TABLES: one linetype, layer 0, one text style, active VPORT.
